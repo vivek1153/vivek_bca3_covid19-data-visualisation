@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>COVID-19 Global Trends Visualization</title>
+<style>
+  /* Reset and base styles */
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #121212;
+    color: #eee;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px;
+    max-width: 350px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  h1 {
+    font-weight: 700;
+    font-size: 1.5rem;
+    margin: 10px 0 5px 0;
+    text-align: center;
+    color: #4fc3f7;
+  }
+  h2 {
+    font-weight: 600;
+    font-size: 1.2rem;
+    margin: 15px 0 5px 0;
+    color: #81d4fa;
+  }
+  #loading {
+    text-align: center;
+    margin-top: 20px;
+    color: #bbb;
+  }
+  select {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 1rem;
+    margin-bottom: 10px;
+    border-radius: 5px;
+    border: none;
+    background: #263238;
+    color: #eee;
+    outline: none;
+  }
+  canvas {
+    width: 100% !important;
+    height: auto !important;
+    max-height: 350px;
+    border-radius: 8px;
+    background: #212121;
+    box-shadow: 0 0 10px #202020;
+  }
+  footer {
+    margin-top: 20px;
+    font-size: 0.75rem;
+    color: #666;
+    text-align: center;
+  }
+  a {
+    color: #4fc3f7;
+    text-decoration: none;
+  }
+  a:hover {
+    text-decoration: underline;
+  }
+  /* Scroll container for mobile */
+  #container {
+    width: 100%;
+    max-height: 600px;
+    overflow-y: auto;
+  }
+</style>
+</head>
+<body>
+  <h1>COVID-19 Global Trends</h1>
+  <div id="container">
+    <label for="countrySelect">Select a Country:</label>
+    <select id="countrySelect">
+      <option value="Global" selected>Global</option>
+    </select>
+    <canvas id="covidChart"></canvas>
+    <div id="loading">Loading data, please wait...</div>
+  </div>
+  <footer>
+    Data source: <a href="https://github.com/CSSEGISandData/COVID-19" target="_blank" rel="noopener noreferrer">Johns Hopkins University CSSE</a><br/>
+    Visualization by BLACKBOXAI
+  </footer>
+
+  <!-- Import PapaParse for CSV parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <!-- Import Chart.js for charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.3.0/dist/chart.umd.min.js"></script>
+
+  <script>
+    (function () {
+      const countrySelect = document.getElementById('countrySelect');
+      const loadingElem = document.getElementById('loading');
+      const ctx = document.getElementById('covidChart').getContext('2d');
+
+      // URLs for JHU time series data (daily reported)
+      const jhuConfirmedURL = 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv';
+      const jhuDeathsURL = 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv';
+      const jhuRecoveredURL = 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_recovered_global.csv';
+
+      let globalDataByDate = {}; // { date: { confirmed, deaths, recovered } }
+      let countryData = {}; // { country: { date: { confirmed, deaths, recovered } } }
+      let dateLabels = []; // ordered date strings
+
+      let covidChart;
+
+      function mergeData(confirmedData, deathsData, recoveredData) {
+        // confirmedData, deathsData, recoveredData are arrays of parsed CSV rows (including header row removed)
+        // each row: [Province/State, Country/Region, Lat, Long, date1, date2, ..., dateN]
+
+        // Step 1: Get all dates from header - dates start at index 4
+        const header = confirmedData[0];
+        const dates = header.slice(4);
+
+        dateLabels = dates;
+
+        // Prepare containers
+        let tempDataByCountry = {};
+        
+        // Helper: Sum values across rows for a country aggregation
+        function aggregateRows(rows) {
+          let aggregate = {};
+          dates.forEach(date => aggregate[date] = 0);
+          for (const row of rows) {
+            for (let i = 0; i < dates.length; i++) {
+              let cell = row[i + 4];
+              let val = parseInt(cell, 10);
+              if (!isNaN(val)) {
+                aggregate[dates[i]] += val;
+              }
+            }
+          }
+          return aggregate;
+        }
+
+        // Build country group for confirmed
+        const confirmedByCountry = {};
+        for (let i = 1; i < confirmedData.length; i++) {
+          let row = confirmedData[i];
+          const country = row[1];
+          if (!confirmedByCountry[country]) confirmedByCountry[country] = [];
+          confirmedByCountry[country].push(row);
+        }
+
+        // Build country group for deaths
+        const deathsByCountry = {};
+        for (let i = 1; i < deathsData.length; i++) {
+          let row = deathsData[i];
+          const country = row[1];
+          if (!deathsByCountry[country]) deathsByCountry[country] = [];
+          deathsByCountry[country].push(row);
+        }
+
+        // Build country group for recovered
+        const recoveredByCountry = {};
+        for (let i = 1; i < recoveredData.length; i++) {
+          let row = recoveredData[i];
+          const country = row[1];
+          if (!recoveredByCountry[country]) recoveredByCountry[country] = [];
+          recoveredByCountry[country].push(row);
+        }
+
+        // Iterate countries found in confirmed dataset (main)
+        for (const country of Object.keys(confirmedByCountry)) {
+          const confirmedAgg = aggregateRows(confirmedByCountry[country]);
+          const deathsAgg = deathsByCountry[country] ? aggregateRows(deathsByCountry[country]) : null;
+          const recoveredAgg = recoveredByCountry[country] ? aggregateRows(recoveredByCountry[country]) : null;
+
+          if (!countryData[country]) countryData[country] = {};
+          dates.forEach(date => {
+            countryData[country][date] = {
+              confirmed: confirmedAgg[date] || 0,
+              deaths: deathsAgg ? (deathsAgg[date] || 0) : 0,
+              recovered: recoveredAgg ? (recoveredAgg[date] || 0) : 0,
+            };
+          });
+        }
+
+        // Calculate Global Aggregate by summing all countries' data per date
+        dateLabels.forEach(date => {
+          let confirmedSum = 0, deathSum = 0, recoverSum = 0;
+          for (const country in countryData) {
+            confirmedSum += countryData[country][date]?.confirmed || 0;
+            deathSum += countryData[country][date]?.deaths || 0;
+            recoverSum += countryData[country][date]?.recovered || 0;
+          }
+          globalDataByDate[date] = {
+            confirmed: confirmedSum,
+            deaths: deathSum,
+            recovered: recoverSum,
+          };
+        });
+      }
+
+      // Build country dropdown options sorted alphabetically
+      function populateCountrySelect() {
+        const countries = Object.keys(countryData).sort((a,b) => a.localeCompare(b));
+        for (const country of countries) {
+          const option = document.createElement('option');
+          option.value = country;
+          option.textContent = country;
+          countrySelect.appendChild(option);
+        }
+      }
+
+      function extractTimeSeries(country) {
+        let dataSet = [];
+        let deathsSet = [];
+        let recoveredSet = [];
+
+        if (country === 'Global') {
+          dateLabels.forEach(date => {
+            const d = globalDataByDate[date];
+            dataSet.push(d.confirmed);
+            deathsSet.push(d.deaths);
+            recoveredSet.push(d.recovered);
+          });
+        } else {
+          dateLabels.forEach(date => {
+            if (countryData[country] && countryData[country][date]) {
+              dataSet.push(countryData[country][date].confirmed);
+              deathsSet.push(countryData[country][date].deaths);
+              recoveredSet.push(countryData[country][date].recovered);
+            } else {
+              dataSet.push(0);
+              deathsSet.push(0);
+              recoveredSet.push(0);
+            }
+          });
+        }
+        return {confirmed: dataSet, deaths: deathsSet, recovered: recoveredSet};
+      }
+
+      // Format dates for display (e.g. M/D/YY)
+      function formatLabel(dateStr) {
+        let parts = dateStr.split('/');
+        if (parts.length === 3) {
+          let m = parts[0], d = parts[1], y = parts[2];
+          return `${m}/${d}/20${y}`;
+        }
+        return dateStr;
+      }
+
+      function createChart(labels, dataSets) {
+        if (covidChart) {
+          covidChart.destroy();
+        }
+        covidChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: dataSets,
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+              mode: 'index',
+              intersect: false,
+            },
+            stacked: false,
+            plugins: {
+              title: {
+                display: true,
+                text: 'COVID-19 Confirmed Cases, Deaths, and Recoveries Over Time',
+                color: '#90caf9',
+                font: {
+                  size: 16,
+                  weight: 'bold',
+                }
+              },
+              legend: {
+                labels: {
+                  color: '#eee',
+                  font: {
+                    weight: '600'
+                  }
+                }
+              },
+              tooltip: {
+                enabled: true,
+                mode: 'nearest',
+                intersect: false,
+                callbacks: {
+                  label: function(context) {
+                    let value = context.parsed.y || 0;
+                    return context.dataset.label + ': ' + value.toLocaleString();
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                ticks: {
+                  color: '#bbbbbb',
+                  maxRotation: 90,
+                  minRotation: 45,
+                  maxTicksLimit: 10,
+                },
+                grid: {
+                  color: '#333333',
+                },
+              },
+              y: {
+                beginAtZero: true,
+                ticks: {
+                  color: '#bbbbbb',
+                  callback: function(value) {
+                    return value.toLocaleString();
+                  }
+                },
+                grid: {
+                  color: '#333333',
+                  borderDash: [5, 5]
+                },
+                title: {
+                  display: true,
+                  text: "Number of People",
+                  color: '#bbb',
+                }
+              }
+            }
+          }
+        });
+      }
+
+      // Update chart based on selected country
+      function updateChart() {
+        loadingElem.textContent = "Rendering chart...";
+        const country = countrySelect.value;
+        const timeSeries = extractTimeSeries(country);
+        const formattedLabels = dateLabels.map(formatLabel);
+
+        const datasets = [
+          {
+            label: 'Confirmed Cases',
+            data: timeSeries.confirmed,
+            borderColor: '#42a5f5',
+            backgroundColor: 'rgba(66, 165, 245, 0.2)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 1.5,
+            borderWidth: 2,
+          },
+          {
+            label: 'Deaths',
+            data: timeSeries.deaths,
+            borderColor: '#ef5350',
+            backgroundColor: 'rgba(239, 83, 80, 0.2)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 1.5,
+            borderWidth: 2,
+          },
+          {
+            label: 'Recoveries',
+            data: timeSeries.recovered,
+            borderColor: '#66bb6a',
+            backgroundColor: 'rgba(102, 187, 106, 0.2)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 1.5,
+            borderWidth: 2,
+          }
+        ];
+        createChart(formattedLabels, datasets);
+        loadingElem.textContent = "";
+      }
+
+      // Fetch CSV data from URLs and parse with PapaParse
+      async function fetchCSV(url) {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Network error fetching ${url}`);
+        const textData = await response.text();
+        return Papa.parse(textData, {header: false, skipEmptyLines: true}).data;
+      }
+
+      async function loadData() {
+        loadingElem.textContent = 'Loading confirmed cases data...';
+        const confirmedData = await fetchCSV(jhuConfirmedURL);
+        loadingElem.textContent = 'Loading deaths data...';
+        const deathsData = await fetchCSV(jhuDeathsURL);
+        loadingElem.textContent = 'Loading recovered data...';
+        const recoveredData = await fetchCSV(jhuRecoveredURL);
+
+        // Remove header rows to prepare for merging
+        // PapaParse includes header row in data[0]
+        // We keep all rows because mergeData expects header as first row
+        mergeData(confirmedData, deathsData, recoveredData);
+        populateCountrySelect();
+        updateChart();
+      }
+
+      countrySelect.addEventListener('change', () => {
+        updateChart();
+      });
+
+      // Initialize
+      loadData().catch(e => {
+        loadingElem.textContent = 'Failed to load data: ' + e.message;
+        console.error(e);
+      });
+    })();
+  </script>
+</body>
+</html>
+</content>
+</create_file>
